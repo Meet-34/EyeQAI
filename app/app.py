@@ -1,29 +1,42 @@
 """
-app.py — Flask Application
+app.py — Flask Application (Performance-Optimized)
 ============================
-KEY ARCHITECTURE DECISIONS:
+KEY ARCHITECTURE DECISIONS (unchanged):
 
   SINGLE PROCESSING THREAD
   ─────────────────────────
   All MediaPipe calls happen in _processing_thread(), which is the ONLY
   consumer of the camera queue.  The Flask generator thread only reads
-  pre-processed results from _latest_result.  This eliminates the root
-  cause of "Packet timestamp mismatch": MediaPipe is called from exactly
-  one OS thread, in strict sequential order, with no concurrent access.
+  pre-processed results from _latest_result.
 
   FRAME QUEUE (maxsize=1)
   ───────────────────────
-  WebcamStream puts frames into a Queue(maxsize=1).  If the queue is full,
-  the old frame is discarded and the new one takes its place.  This means
-  the processing thread always gets the LATEST frame, never a stale one,
-  and never blocks the camera capture thread.
+  WebcamStream puts frames into a Queue(maxsize=1), always keeping the
+  latest frame and discarding stale ones.
 
   FLASK GENERATOR (read-only)
   ────────────────────────────
-  generate_frames() reads from _latest_result (a threading.Event + dict
-  protected by a RLock).  It never calls detector.process_frame() directly.
-  Multiple Flask client connections therefore share the same processed
-  result without triggering duplicate MediaPipe calls.
+  generate_frames() reads from _latest_result, never calls process_frame().
+
+PERFORMANCE OPTIMIZATIONS APPLIED:
+  [OPT-A] Target FPS raised from 25 → 30 for smoother display; the per-frame
+          cost drop from detection.py optimizations creates headroom for this.
+  [OPT-B] MJPEG encode quality lowered to 70 (was implicitly 95 in most
+          cv2.imencode defaults) — reduces encode time and network payload
+          with no visible difference on a local stream.
+  [OPT-C] Processing thread skips every other frame (PROC_SKIP=2) when
+          the queue is consistently full, indicating the camera produces
+          frames faster than we can process them.  Metrics and annotation
+          from the previous frame are served instead.
+  [OPT-D] WebcamStream warm-up loop reduced from 10 → 5 reads; 10 was
+          unnecessarily long for most cameras.
+  [OPT-E] Camera buffer size already set to 1; added explicit FourCC hint
+          (MJPG) to request hardware-compressed frames from the driver,
+          reducing USB bandwidth and V4L2 copy overhead.
+  [OPT-F] resize_frame call in the processing thread removed — downscaling
+          is now handled inside DrowsinessDetector.process_frame() via the
+          PROC_WIDTH/PROC_HEIGHT constants, keeping the full-res frame
+          available for annotation without a redundant resize step here.
 """
 
 import cv2
@@ -49,8 +62,6 @@ from utils import mjpeg_response, resize_frame
 detector = DrowsinessDetector(model_path=str(MODEL_PATH))
 
 # ── Shared state ──────────────────────────────────────────────
-# _metrics_lock protects latest_metrics (read by /metrics, written by
-# the processing thread).
 _metrics_lock  = threading.Lock()
 latest_metrics = {
     "status":          "FOCUSED",
@@ -64,15 +75,15 @@ latest_metrics = {
     "timestamp":       time.time(),
 }
 
-# _result_lock protects _latest_result (read by generator, written by
-# the processing thread).
 _result_lock   = threading.Lock()
 _latest_result = {
     "annotated_frame": np.zeros((480, 640, 3), dtype=np.uint8),
 }
-# Event lets the generator block cheaply until a new frame is ready
-# instead of busy-polling.
 _frame_ready = threading.Event()
+
+# [OPT-B] JPEG encode quality — 70 is visually indistinguishable at 640×480
+# on a local network stream but reduces imencode + I/O cost noticeably.
+_JPEG_QUALITY = 70
 
 
 # ── WebcamStream ──────────────────────────────────────────────
@@ -80,20 +91,19 @@ class WebcamStream:
     """
     Captures camera frames in a dedicated thread and exposes them via
     a Queue(maxsize=1).
-
-    Queue semantics:
-      - put_nowait() with a full queue raises queue.Full; we catch it,
-        discard the stale frame, and put the new one in.  This guarantees
-        the processing thread always receives the most recent frame.
-      - The processing thread calls get() with a timeout so it never
-        blocks forever if the camera stalls.
     """
 
     def __init__(self, src: int = 0):
         self._cap = cv2.VideoCapture(src)
 
-    # 🔥 ADD THIS BLOCK (camera warm-up)
-        for _ in range(10):
+        # [OPT-E] Request MJPEG from camera driver — many webcams support it
+        # and it reduces raw USB bandwidth significantly vs. uncompressed YUY2.
+        # Falls back gracefully if the camera doesn't support it.
+        self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+
+        # [OPT-D] Reduced warm-up from 10 → 5 reads; sufficient for most
+        # cameras to stabilise auto-exposure without wasting startup time.
+        for _ in range(5):
             self._cap.read()
 
         if not self._cap.isOpened():
@@ -101,14 +111,14 @@ class WebcamStream:
         else:
             print("✅ Camera opened")
 
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-        # keep driver buffer at 1 — reduces latency
+        # Keep driver buffer at 1 — reduces capture latency
         self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         # maxsize=1: always latest frame
-        self.queue = queue.Queue(maxsize=1)
+        self.queue    = queue.Queue(maxsize=1)
         self._running = True
 
         self._thread = threading.Thread(
@@ -124,7 +134,7 @@ class WebcamStream:
                 time.sleep(0.005)
                 continue
 
-        # 🔥 Drop old frame if queue is full
+            # Drop old frame if queue is full — always keeps latest
             if self.queue.full():
                 try:
                     self.queue.get_nowait()
@@ -144,30 +154,32 @@ class WebcamStream:
 
 cam = WebcamStream(src=0)
 
+
 # ── Processing thread ─────────────────────────────────────────
-# Target processing rate.  25 FPS keeps MediaPipe happy and leaves
-# headroom for CNN inference without overloading the CPU.
-_TARGET_FPS      = 25
-_FRAME_INTERVAL  = 1.0 / _TARGET_FPS
+# [OPT-A] Raised target FPS from 25 → 30.  The detector's internal
+#   downscaling + metric-skipping frees enough CPU budget for this.
+_TARGET_FPS     = 30
+_FRAME_INTERVAL = 1.0 / _TARGET_FPS
+
+# [OPT-C] Frame-skip ratio for the processing thread: when the camera
+#   queue is consistently full (camera outruns processing), skip every
+#   other detection pass and re-publish the previous annotated frame.
+#   This keeps the video stream fluid without stalling the capture thread.
+PROC_SKIP        = 2   # process 1 out of every PROC_SKIP frames
+_proc_skip_count = 0
 
 
 def _processing_thread():
     """
     THE ONLY THREAD THAT CALLS detector.process_frame().
-
-    This is the architectural fix for MediaPipe timestamp errors:
-      - One thread, strictly sequential calls, no concurrency.
-      - Frames arrive via cam.queue at camera FPS; we rate-limit
-        processing to _TARGET_FPS to avoid flooding MediaPipe.
-      - The processed result is stored in _latest_result for the
-        Flask generator to read asynchronously.
+    Architecture unchanged; processing cadence optimised.
     """
-    global latest_metrics
+    global latest_metrics, _proc_skip_count
 
     last_process_t = 0.0
 
     while True:
-        # Rate-limit: wait until the next processing slot
+        # Rate-limit: wait until next processing slot
         now   = time.monotonic()
         sleep = _FRAME_INTERVAL - (now - last_process_t)
         if sleep > 0:
@@ -181,19 +193,27 @@ def _processing_thread():
 
         last_process_t = time.monotonic()
 
-        # Resize before processing (keeps MediaPipe input size consistent)
-        small = resize_frame(frame, max_width=640)
+        # [OPT-C] If the camera queue was full (overproducing), skip
+        # every other processing cycle.  The generator will re-serve the
+        # last annotated frame, keeping video smooth without extra CPU cost.
+        _proc_skip_count += 1
+        if cam.queue.full() and _proc_skip_count % PROC_SKIP != 0:
+            # Queue still has a fresh frame — skip this cycle
+            continue
 
+        # [OPT-F] No resize_frame() here — DrowsinessDetector now handles
+        # internal downscaling.  Passing the full-res frame lets the detector
+        # return a full-res annotated_frame for streaming.
         try:
-            result = detector.process_frame(small)
+            result = detector.process_frame(frame)
         except Exception as e:
             print(f"❌ process_frame error: {e}")
             continue
 
-        # Fallback: if annotated_frame is missing/empty, use raw resized frame
+        # Fallback: if annotated_frame is missing/empty, use raw frame
         annotated = result.get("annotated_frame")
         if annotated is None or annotated.size == 0:
-            annotated = small
+            annotated = frame
 
         # Publish processed frame for the generator
         with _result_lock:
@@ -228,15 +248,13 @@ _proc_thread.start()
 def generate_frames():
     """
     Reads annotated frames from _latest_result and yields MJPEG chunks.
-
-    This function runs in the Flask request thread.  It NEVER calls
-    detector.process_frame() — it only reads pre-processed frames.
-
-    _frame_ready.wait(timeout) provides back-pressure: if the processing
-    thread is slow, the generator waits instead of hammering the lock.
+    Never calls detector.process_frame() directly.
     """
     # Wait for the first frame to be ready (up to 5 s)
     _frame_ready.wait(timeout=5.0)
+
+    # [OPT-B] Pre-build the encode params list once instead of per-frame
+    encode_params = [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY]
 
     while True:
         _frame_ready.wait(timeout=0.01)
@@ -247,7 +265,17 @@ def generate_frames():
         if frame is None or frame.size == 0:
             continue
 
-        yield mjpeg_response(frame)
+        # [OPT-B] Use explicit quality param for faster, smaller JPEG encode
+        ret, buf = cv2.imencode(".jpg", frame, encode_params)
+        if not ret:
+            continue
+
+        yield (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n\r\n"
+            + buf.tobytes()
+            + b"\r\n"
+        )
 
 
 # ── Routes ────────────────────────────────────────────────────
