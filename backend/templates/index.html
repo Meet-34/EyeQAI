@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DrowsAI — Live Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='index.css') }}">
+</head>
+<body>
+
+<!-- ── Navbar ───────────────────────────────────────────────── -->
+<nav class="navbar">
+  <div class="nav-brand">
+    <span class="brand-dot"></span>
+    <span class="brand-name">EyeQ</span>
+  </div>
+  <div class="nav-links">
+    <a href="/" class="nav-link active">Live Monitor</a>
+    <a href="/dashboard" class="nav-link">Dashboard</a>
+  </div>
+  <button class="theme-toggle" id="themeToggle" title="Toggle theme" aria-label="Toggle dark/light mode">
+    <span class="theme-icon">☀</span>
+  </button>
+</nav>
+
+<!-- ── Alert Banner ─────────────────────────────────────────── -->
+<div class="alert-banner" id="alertBanner">
+  <span class="alert-icon"></span>
+  <span class="alert-text" id="alertText">DROWSINESS DETECTED — Please take a break!</span>
+  <button class="alert-dismiss" onclick="dismissAlert()">✕</button>
+</div>
+
+<!-- ── Main Layout ──────────────────────────────────────────── -->
+<main class="monitor-layout">
+
+  <!-- LEFT: Camera feed -->
+  <section class="feed-section">
+    <div class="feed-wrapper">
+      <div class="feed-header">
+        <span class="live-badge"><span class="live-dot"></span>LIVE</span>
+        <span class="feed-fps" id="feedFps">— fps</span>
+      </div>
+      <div class="feed-frame">
+        <img src="/video_feed" alt="Live webcam feed" class="feed-img" id="feedImg" />
+        <div class="feed-overlay" id="feedOverlay">
+          <div class="no-face-msg" id="noFaceMsg" style="display:none">
+            <span class="no-face-icon">⊙</span>
+            <p>No face detected</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT: Metrics & status -->
+  <aside class="metrics-panel">
+
+    <!-- Status Card -->
+    <div class="status-card" id="statusCard">
+      <div class="status-label">Attention State</div>
+      <div class="status-badge" id="statusBadge">
+        <span class="status-indicator" id="statusIndicator"></span>
+        <span class="status-text" id="statusText">Loading…</span>
+      </div>
+      <div class="score-section">
+        <div class="score-label">Attention Score</div>
+        <div class="score-bar-wrapper">
+          <div class="score-bar" id="scoreBar"></div>
+        </div>
+        <div class="score-value" id="scoreValue">—</div>
+      </div>
+    </div>
+
+    <!-- Live Metrics Grid -->
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-label">EAR</div>
+        <div class="metric-value" id="metEar">—</div>
+        <div class="metric-sub">Eye Aspect Ratio</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">MAR</div>
+        <div class="metric-value" id="metMar">—</div>
+        <div class="metric-sub">Mouth Aspect Ratio</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">YAW</div>
+        <div class="metric-value" id="metYaw">—°</div>
+        <div class="metric-sub">Head Angle</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">EYE</div>
+        <div class="metric-value" id="metEye">—</div>
+        <div class="metric-sub">CNN Prediction</div>
+      </div>
+    </div>
+
+  </aside>
+</main>
+
+<script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EyeQ - Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+</head>
+<body>
+
+<!-- ── Navbar ───────────────────────────────────────────────────── -->
+<nav class="navbar">
+  <div class="nav-brand">
+    <span class="brand-dot"></span>
+    <span class="brand-name">EyeQ</span>
+  </div>
+  <div class="nav-links">
+    <a href="/" class="nav-link">Live Monitor</a>
+    <a href="/dashboard" class="nav-link active">Dashboard</a>
+  </div>
+  <button class="theme-toggle" id="themeToggle" title="Toggle theme" aria-label="Toggle theme">
+    <span class="theme-icon">☀</span>
+  </button>
+</nav>
+
+<!-- ── Dashboard Content ────────────────────────────────────────── -->
+<main class="dashboard-layout">
+
+  <!-- ── Header ───────────────────────────────────────────────── -->
+  <div class="dash-header">
+    <div>
+      <h1 class="dash-title">Session Dashboard</h1>
+      <p class="dash-sub">Analytics & event history for this session</p>
+    </div>
+    <div class="dash-header-right">
+      <span class="last-updated" id="lastUpdated">Updating…</span>
+      <button class="refresh-btn" id="refreshBtn">↻ Refresh</button>
+    </div>
+  </div>
+
+  <!-- ── KPI Row ───────────────────────────────────────────────── -->
+  <div class="kpi-row">
+    <div class="kpi-card">
+      <div class="kpi-icon">◎</div>
+      <div class="kpi-body">
+        <div class="kpi-label">Total Events</div>
+        <div class="kpi-value" id="kpiTotal">—</div>
+      </div>
+    </div>
+    <div class="kpi-card focused-kpi">
+      <div class="kpi-icon">✓</div>
+      <div class="kpi-body">
+        <div class="kpi-label">Focused</div>
+        <div class="kpi-value" id="kpiFocused">—</div>
+      </div>
+    </div>
+    <div class="kpi-card drowsy-kpi">
+      <div class="kpi-icon">⊘</div>
+      <div class="kpi-body">
+        <div class="kpi-label">Drowsy</div>
+        <div class="kpi-value" id="kpiDrowsy">—</div>
+      </div>
+    </div>
+    <div class="kpi-card inatt-kpi">
+      <div class="kpi-icon">⊛</div>
+      <div class="kpi-body">
+        <div class="kpi-label">Inattentive</div>
+        <div class="kpi-value" id="kpiInatt">—</div>
+      </div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-icon">⌀</div>
+      <div class="kpi-body">
+        <div class="kpi-label">Avg Score</div>
+        <div class="kpi-value" id="kpiAvgScore">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="live-metrics-row">
+
+  <div class="metric-card">
+    <div class="metric-title">EAR</div>
+    <div class="metric-value" id="earValue">—</div>
+    <div class="metric-sub">Eye Aspect Ratio</div>
+  </div>
+
+  <div class="metric-card">
+    <div class="metric-title">MAR</div>
+    <div class="metric-value" id="marValue">—</div>
+    <div class="metric-sub">Mouth Aspect Ratio</div>
+  </div>
+
+  <div class="metric-card">
+    <div class="metric-title">YAW</div>
+    <div class="metric-value" id="yawValue">—</div>
+    <div class="metric-sub">Head Angle</div>
+  </div>
+
+  <div class="metric-card">
+    <div class="metric-title">HEAD DIRECTION</div>
+    <div class="metric-value" id="headDirection">CENTER</div>
+    <div class="metric-sub">Direction</div>
+  </div>
+
+  <div class="metric-card">
+    <div class="metric-title">ATTENTION</div>
+    <div class="metric-value" id="attentionState">FOCUSED</div>
+    <div class="metric-sub">State</div>
+  </div>
+
+  <div class="metric-card">
+    <div class="metric-title">SCORE</div>
+    <div class="metric-value" id="attentionScore">100</div>
+    <div class="metric-sub">Attention Score</div>
+  </div>
+
+</div>
+
+  <!-- ── Charts Row ───────────────────────────────────────────── -->
+  <div class="charts-row">
+
+    <!-- Doughnut: Status Distribution -->
+    <div class="chart-card chart-sm">
+      <div class="chart-title">Status Distribution</div>
+      <div class="chart-wrap">
+        <canvas id="doughnutChart"></canvas>
+      </div>
+      <div class="doughnut-legend" id="doughnutLegend"></div>
+    </div>
+
+    <!-- Line: Attention Score over Time -->
+    <div class="chart-card chart-lg">
+      <div class="chart-title">Attention Score — Over Time</div>
+      <div class="chart-wrap">
+        <canvas id="lineChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Bar: Status Timeline -->
+    <div class="chart-card chart-md">
+      <div class="chart-title">Event Timeline</div>
+      <div class="chart-wrap">
+        <canvas id="barChart"></canvas>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Event Log Table ───────────────────────────────────────── -->
+  <div class="table-card">
+    <div class="table-header">
+      <div class="chart-title">Recent Events</div>
+      <div class="table-count" id="tableCount"></div>
+    </div>
+    <div class="table-wrapper">
+      <table class="events-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Status</th>
+            <th>EAR</th>
+            <th>Yaw</th>
+            <th>Score</th>
+          </tr>
+        </thead>
+        <tbody id="eventTableBody">
+          <tr class="empty-row">
+            <td colspan="5">No events recorded yet. Start the live monitor.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</main>
+
+<script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>
