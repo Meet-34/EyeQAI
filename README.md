@@ -152,11 +152,3 @@ Frame smoothing ensures stable predictions across multiple frames.
 * Cloud-based model loading
 * Multi-user analytics dashboard
 * Mobile deployment
-
----
-
-## 🧠 Viva Explanation (Use this)
-
-“EyeQAI uses a hybrid AI approach combining deep learning and geometric features to accurately detect drowsiness and inattentiveness in real time, while minimizing false positives.”
-
----
